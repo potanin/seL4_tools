@@ -100,6 +100,11 @@
     lsr     x3, x3, #23
 
     cbz     x3, finished_\op
+
+    /* Check FEAT_CCIDX: ID_AA64MMFR2_EL1[23:20] != 0 means 64-bit CCSIDR */
+    mrs     x12, id_aa64mmfr2_el1
+    ubfx    x12, x12, #20, #4
+
     mov     x10, #0
 
 loop1_\op:
@@ -115,11 +120,29 @@ loop1_\op:
     mrs     x1, ccsidr_el1
     and     x2, x1, #7
     add     x2, x2, #4
+
+    /* Extract associativity (num ways - 1) */
+    cbz     x12, 1f
+    /* CCIDX: associativity is CCSIDR_EL1[23:3] (21 bits) */
+    ubfx    x4, x1, #3, #21
+    b       2f
+1:
+    /* Legacy: associativity is CCSIDR_EL1[12:3] (10 bits) */
     mov     x4, #0x3ff
     and     x4, x4, x1, lsr #3
+2:
     clz     w5, w4
+
+    /* Extract num sets - 1 */
+    cbz     x12, 3f
+    /* CCIDX: numsets is CCSIDR_EL1[55:32] (24 bits) */
+    ubfx    x7, x1, #32, #24
+    b       4f
+3:
+    /* Legacy: numsets is CCSIDR_EL1[27:13] (15 bits) */
     mov     x7, #0x7fff
     and     x7, x7, x1, lsr #13
+4:
 
 loop2_\op:
     mov     x9, x4

@@ -11,6 +11,89 @@ void *__application_handle = NULL;             // current efi application handle
 efi_system_table_t *__efi_system_table = NULL; // current efi system table
 
 extern void _start(void);
+/* Minimal UEFI console output for early debug (UCS-2 strings) */
+typedef struct {
+    void *Reset;
+    unsigned long (*OutputString)(void *this, uint16_t *string);
+} efi_simple_text_out_t;
+
+static int efi_conout_active = 1;
+
+static void efi_putchar(unsigned int c)
+{
+    if (!efi_conout_active || !__efi_system_table || !__efi_system_table->con_out) {
+        return;
+    }
+    efi_simple_text_out_t *con_out = (efi_simple_text_out_t *)__efi_system_table->con_out;
+    if (con_out->OutputString) {
+        uint16_t str[3];
+        int i = 0;
+        if (c == '\n') {
+            str[i++] = '\r';
+        }
+        str[i++] = (uint16_t)c;
+        str[i] = 0;
+        con_out->OutputString(con_out, str);
+    }
+}
+
+void efi_conout_disable(void)
+{
+    efi_conout_active = 0;
+}
+
+/*
+ * Override the WEAK plat_console_putchar.
+ * Before ExitBootServices: output to UEFI ConOut (HDMI).
+ * After ExitBootServices: output is dropped (no-op).
+ * UART output is handled directly in continue_boot() after MMU is off.
+ */
+extern volatile int uart_mmio_ready;
+
+/*
+ * Output mode flag:
+ * 0 = ConOut (HDMI, before ExitBootServices)
+ * 1 = UART MMIO (after ExitBootServices)
+ *
+ * Set to 1 by efi_exit_boot_services() BEFORE dcache operations.
+ * This is safe because the variable is written while caches are still in
+ * a consistent state. After dcache cisw on T234, this variable may be stale,
+ * but it would only be stale to its ORIGINAL value (0) or its SET value (1).
+ * If stale as 0, we'd try ConOut which won't output (conout disabled) —
+ * harmless. We avoid the crash by not calling into UEFI at all once output
+ * is in UART mode.
+ */
+static volatile int use_uart = 0;
+
+void plat_console_switch_to_uart(void)
+{
+    use_uart = 1;
+}
+
+int plat_console_putchar(unsigned int c);
+int plat_console_putchar(unsigned int c)
+{
+    if (!use_uart) {
+        /* Before ExitBootServices: ConOut (HDMI) */
+        efi_putchar(c);
+        return 0;
+    }
+
+    /* After ExitBootServices: always UART */
+    volatile uint32_t *uart = (volatile uint32_t *)0x3100000UL;
+    if (c == '\n') {
+        int t = 50000;
+        while (!(uart[5] & 0x20) && --t > 0) { }
+        uart[0] = '\r';
+    }
+    {
+        int t = 50000;
+        while (!(uart[5] & 0x20) && --t > 0) { }
+        uart[0] = (uint32_t)c;
+    }
+    return 0;
+}
+
 unsigned int efi_main(uintptr_t application_handle, uintptr_t efi_system_table)
 {
     clear_bss();
@@ -76,6 +159,11 @@ again:
         bts->free_pool(memory_map);
         return status;
     }
+
+    /* Switch output to UART before exiting boot services.
+     * This must happen while caches are still consistent (before any dcache ops). */
+    efi_conout_disable();
+    plat_console_switch_to_uart();
 
     status = bts->exit_boot_services(__application_handle, key);
     return status;
