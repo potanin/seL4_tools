@@ -188,7 +188,7 @@ void main(UNUSED void *arg)
     platform_init();
 
     /* Print welcome message. */
-    printf("\n[seL4 orin-nano v115-no-keepalive]\n");
+    printf("\n[seL4 orin-nano v116]\n");
     printf("ELF-loader started on ");
     print_cpuid();
     {
