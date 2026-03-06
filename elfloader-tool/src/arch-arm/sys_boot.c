@@ -112,6 +112,7 @@ static void bpmp_enable_uartc(void)
     p[1] = 102;
     bpmp_send_phys(20, p, 2);
 }
+
 #endif
 
 /*
