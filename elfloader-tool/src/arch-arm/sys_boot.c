@@ -188,17 +188,8 @@ void main(UNUSED void *arg)
     platform_init();
 
     /* Print welcome message. */
-    printf("\n[seL4 orin-nano v116]\n");
-    printf("ELF-loader started on ");
+    printf("\nELF-loader started on ");
     print_cpuid();
-    {
-        uint32_t cel;
-        uint64_t sctlr;
-        __asm__ volatile("mrs %0, CurrentEL" : "=r"(cel));
-        __asm__ volatile("mrs %0, sctlr_el2" : "=r"(sctlr));
-        printf("  CurrentEL=%u (EL%u) sctlr_el2=0x%lx (MMU %s)\n",
-               cel, cel >> 2, sctlr, (sctlr & 1) ? "ON" : "OFF");
-    }
     printf("  paddr=[%p..%p]\n", _text, (uintptr_t)_end - 1);
 
 #if defined(CONFIG_IMAGE_UIMAGE)
@@ -213,22 +204,15 @@ void main(UNUSED void *arg)
 #elif defined(CONFIG_IMAGE_EFI)
 
     bootloader_dtb = efi_get_fdt();
-    printf("  dtb from UEFI=%p\n", bootloader_dtb);
 
     /* Enable UARTC clock via BPMP before ExitBootServices.
-     * BPMP IPC shmem (0x40070000) is mapped in UEFI page tables.
-     * UARTC MMIO (0xc280000) is NOT mapped — don't touch it here. */
+     * BPMP IPC shmem (0x40070000) is mapped in UEFI page tables. */
     bpmp_enable_uartc();
-
-    printf("Exiting UEFI boot services...\n");
 
     if (efi_exit_boot_services() != EFI_SUCCESS) {
         printf("ERROR: Unable to exit UEFI boot services!\n");
         abort();
     }
-
-    /* UART MMIO (0xc280000) is not mapped in UEFI page tables.
-     * Output is silently dropped until continue_boot() enables UART. */
 
 #endif
 
@@ -237,8 +221,6 @@ void main(UNUSED void *arg)
     } else {
         printf("No DTB passed in from boot loader.\n");
     }
-
-    printf("  elfloader=[%p..%p]\n", _text, (uintptr_t)_end - 1);
 
     /* Unpack ELF images into memory. */
     unsigned int num_apps = 0;
@@ -267,17 +249,11 @@ void main(UNUSED void *arg)
     abort();
 }
 
-
 void continue_boot(int was_relocated)
 {
-    printf("continue_boot(%d)\n", was_relocated);
-    printf("  CB step 1\n");
-
     if (was_relocated) {
         printf("ELF loader relocated, continuing boot...\n");
     }
-
-    printf("  CB step 2\n");
 
     /*
      * If we were relocated, we need to re-initialise the
@@ -290,18 +266,13 @@ void continue_boot(int was_relocated)
         }
     }
 
-    printf("  CB step 3\n");
-
 #if (defined(CONFIG_ARCH_ARM_V7A) || defined(CONFIG_ARCH_ARM_V8A)) && !defined(CONFIG_ARM_HYPERVISOR_SUPPORT)
     if (is_hyp_mode()) {
         extern void leave_hyp(void);
         leave_hyp();
     }
 #endif
-    printf("  CB step 4\n");
-
     /* Setup MMU. */
-    printf("  hyp=%d\n", is_hyp_mode());
     if (is_hyp_mode()) {
 #ifdef CONFIG_ARCH_AARCH64
         extern void disable_caches_hyp();
@@ -310,16 +281,13 @@ void continue_boot(int was_relocated)
          * flush them to PoC (DRAM) with dc cvac while caches are ON.
          * On T234, dc cisw only reaches CPU caches, not the system-level
          * cache (SLC). dc cvac reaches PoC past the SLC. */
-        printf("  init_hyp_boot_vspace...\n");
         init_hyp_boot_vspace(&kernel_info);
-        printf("  vspace done\n");
 
         /* Flush everything to PoC (DRAM) using dc cvac (caches ON).
          * This ensures data passes through all caches including T234's SLC
          * and reaches DRAM before we disable caches.
          * Must flush: boot page tables, kernel image, user image, DTB,
          * and elfloader text/data/BSS (includes stack). */
-        printf("  flushing to PoC...\n");
         {
             extern uint64_t _boot_pgd_down[];
             extern uint64_t _boot_pud_down[];
@@ -344,26 +312,23 @@ void continue_boot(int was_relocated)
 
         disable_caches_hyp();
 
-        /* === Caches OFF (MMU still ON with UEFI page tables) ===
-         * UARTC MMIO (0xc280000) is NOT mapped in UEFI page tables.
-         * No elfloader UART output from here — kernel uses UART_PPTR. */
 #endif
     } else {
         init_boot_vspace(&kernel_info);
     }
 
 #if CONFIG_MAX_NUM_NODES > 1
-    printf("  smp_boot...\n");
     smp_boot();
-    printf("  smp done\n");
 #endif /* CONFIG_MAX_NUM_NODES */
 
     if (is_hyp_mode()) {
+        printf("Enabling hypervisor MMU and jumping to entry point...\n\n");
         arm_enable_hyp_mmu();
     } else {
+        printf("Enabling MMU and jumping to entry point...\n\n");
         arm_enable_mmu();
     }
-    /* Enter kernel — UART output starts from kernel via UART_PPTR. */
+    /* Enter kernel. The UART is no longer accessible here. */
     ((init_arm_kernel_t)kernel_info.virt_entry)(user_info.phys_region_start,
                                                 user_info.phys_region_end,
                                                 user_info.phys_virt_offset,
