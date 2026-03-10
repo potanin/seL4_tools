@@ -52,7 +52,14 @@ void init_boot_vspace(struct image_info *kernel_info)
     vaddr_t last_vaddr = kernel_info->virt_region_end;
     paddr_t first_paddr = kernel_info->phys_region_start;
 
-    init_downpages();
+    _boot_pgd_down[0] = ((uintptr_t)_boot_pud_down) | BIT(1) | BIT(0); /* its a page table */
+
+    for (i = 0; i < BIT(PUD_BITS); i++) {
+        _boot_pud_down[i] = (i << ARM_1GB_BLOCK_BITS)
+                            | BIT(10) /* access flag */
+                            | (4 << 2) /* MT_NORMAL memory */
+                            | BIT(0); /* 1G block */
+    }
 
     _boot_pgd_up[GET_PGD_INDEX(first_vaddr)]
         = ((uintptr_t)_boot_pud_up) | BIT(1) | BIT(0); /* its a page table */
@@ -85,7 +92,12 @@ void init_hyp_boot_vspace(struct image_info *kernel_info)
     vaddr_t first_vaddr = kernel_info->virt_region_start;
     paddr_t first_paddr = kernel_info->phys_region_start;
 
-    init_downpages();
+    for (i = 0; i < BIT(PUD_BITS); i++) {
+        _boot_pud_down[i] = (i << ARM_1GB_BLOCK_BITS)
+                            | BIT(10) /* access flag */
+                            | (4 << 2) /* MT_NORMAL memory */
+                            | BIT(0); /* 1G block */
+    }
 
     _boot_pgd_down[GET_PGD_INDEX(first_vaddr)]
         = ((uintptr_t)_boot_pud_up) | BIT(1) | BIT(0); /* its a page table */
