@@ -128,14 +128,9 @@ BEGIN_FUNC(arm_enable_hyp_mmu)
     isb
 
     enable_mmu  sctlr_el2, x8
-
-    /* DO NOT invalidate I-cache (ic ialluis) here!
-     * After enable_mmu, we execute from the identity map which uses
-     * DEVICE_nGnRnE memory type. Instruction fetch from Device memory
-     * is architecturally forbidden on ARMv8. The instructions currently
-     * in the pipeline/icache work, but ic ialluis would force a refetch
-     * from Device memory — causing hangs on Cortex-A78AE.
-     * The I-cache was already invalidated before enable_mmu. */
+    ic      ialluis
+    dsb     ish
+    isb
     tlbi    alle2is
     dsb     ish
     isb
