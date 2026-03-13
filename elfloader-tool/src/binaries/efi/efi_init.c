@@ -11,41 +11,17 @@ void *__application_handle = NULL;             // current efi application handle
 efi_system_table_t *__efi_system_table = NULL; // current efi system table
 
 extern void _start(void);
-/* Minimal UEFI console output for early debug (UCS-2 strings) */
-typedef struct {
-    void *Reset;
-    unsigned long (*OutputString)(void *this, uint16_t *string);
-} efi_simple_text_out_t;
 
-static volatile int efi_conout_active = 1;
-
-static void efi_putchar(unsigned int c)
-{
-    if (!efi_conout_active || !__efi_system_table || !__efi_system_table->con_out) {
-        return;
-    }
-    efi_simple_text_out_t *con_out = (efi_simple_text_out_t *)__efi_system_table->con_out;
-    if (con_out->OutputString) {
-        uint16_t str[3];
-        int i = 0;
-        if (c == '\n') {
-            str[i++] = '\r';
-        }
-        str[i++] = (uint16_t)c;
-        str[i] = 0;
-        con_out->OutputString(con_out, str);
-    }
-}
-
-void efi_conout_disable(void)
-{
-    efi_conout_active = 0;
-}
-
+/* Override the weak plat_console_putchar from the UART driver.
+ * Before ExitBootServices, UEFI's page tables do not map the UART MMIO
+ * region (0x0c280000). The default weak implementation calls
+ * uart_8250_putchar() which faults on unmapped MMIO.
+ * After ExitBootServices the elfloader sets up identity-mapped page tables
+ * and the kernel initializes its own UART driver, so output resumes there. */
 int plat_console_putchar(unsigned int c);
 int plat_console_putchar(unsigned int c)
 {
-    efi_putchar(c);
+    (void)c;
     return 0;
 }
 
@@ -114,10 +90,6 @@ again:
         bts->free_pool(memory_map);
         return status;
     }
-
-    /* Disable ConOut — UEFI is about to go away.
-     * Output is silently dropped until kernel enables UART via UART_PPTR. */
-    efi_conout_disable();
 
     status = bts->exit_boot_services(__application_handle, key);
     return status;

@@ -15,7 +15,7 @@
 /*
 * Create the 1:1 elfloader mapping to jump into the kernel after enabling the MMU.
 */
-static void init_downpages(void)
+static void __attribute__((unused)) init_downpages(void)
 {
     word_t i;
     vaddr_t start_vaddr = (vaddr_t)_text & ~MASK(ARM_2MB_BLOCK_BITS);
@@ -41,6 +41,38 @@ static void init_downpages(void)
 }
 
 /*
+ * Map the full 4 GiB PA range using 1 GiB PUD block entries with MT_NORMAL.
+ *
+ * On SoCs with firmware-protected memory regions (e.g. NVIDIA T234), the
+ * upstream init_downpages() approach of mapping only the elfloader's own
+ * 2 MiB PMD blocks leaves the rest of the PA space unmapped. This is safe
+ * on most platforms, but on T234 the Cortex-A78AE speculatively reads from
+ * Normal-mapped addresses. If non-DRAM regions are left unmapped, speculative
+ * fetches to those addresses fault immediately (translation fault at EL2).
+ *
+ * Mapping the full range as MT_NORMAL avoids translation faults from
+ * speculative accesses. The kernel's SDRAM-only physical window and the
+ * 2 MiB low-address reservation (in boot.c) prevent any actual RAS errors
+ * from firmware-protected carve-outs once the kernel takes over.
+ *
+ * This is equivalent to the upstream approach before ee7435b, but uses
+ * MT_NORMAL (index 4) instead of DEVICE_nGnRnE (index 0).
+ */
+static void init_downpages_full(void)
+{
+    word_t i;
+
+    _boot_pgd_down[0] = ((uintptr_t)_boot_pud_down) | BIT(1) | BIT(0); /* its a page table */
+
+    for (i = 0; i < BIT(PUD_BITS); i++) {
+        _boot_pud_down[i] = (i << ARM_1GB_BLOCK_BITS)
+                            | BIT(10) /* access flag */
+                            | (4 << 2) /* MT_NORMAL memory */
+                            | BIT(0); /* 1G block */
+    }
+}
+
+/*
 * Create a "boot" page table, which contains a 1:1 mapping below
 * the kernel's first vaddr, and a virtual-to-physical mapping above the
 * kernel's first vaddr.
@@ -52,14 +84,10 @@ void init_boot_vspace(struct image_info *kernel_info)
     vaddr_t last_vaddr = kernel_info->virt_region_end;
     paddr_t first_paddr = kernel_info->phys_region_start;
 
-    _boot_pgd_down[0] = ((uintptr_t)_boot_pud_down) | BIT(1) | BIT(0); /* its a page table */
-
-    for (i = 0; i < BIT(PUD_BITS); i++) {
-        _boot_pud_down[i] = (i << ARM_1GB_BLOCK_BITS)
-                            | BIT(10) /* access flag */
-                            | (4 << 2) /* MT_NORMAL memory */
-                            | BIT(0); /* 1G block */
-    }
+    /* init_downpages() — upstream default, maps only the elfloader's 2 MiB blocks.
+     * init_downpages_full() — maps full 4 GiB as MT_NORMAL 1 GiB PUD blocks.
+     * See comment above init_downpages_full() for why we use the full mapping. */
+    init_downpages_full();
 
     _boot_pgd_up[GET_PGD_INDEX(first_vaddr)]
         = ((uintptr_t)_boot_pud_up) | BIT(1) | BIT(0); /* its a page table */
@@ -92,12 +120,8 @@ void init_hyp_boot_vspace(struct image_info *kernel_info)
     vaddr_t first_vaddr = kernel_info->virt_region_start;
     paddr_t first_paddr = kernel_info->phys_region_start;
 
-    for (i = 0; i < BIT(PUD_BITS); i++) {
-        _boot_pud_down[i] = (i << ARM_1GB_BLOCK_BITS)
-                            | BIT(10) /* access flag */
-                            | (4 << 2) /* MT_NORMAL memory */
-                            | BIT(0); /* 1G block */
-    }
+    /* See comment above init_downpages_full(). */
+    init_downpages_full();
 
     _boot_pgd_down[GET_PGD_INDEX(first_vaddr)]
         = ((uintptr_t)_boot_pud_up) | BIT(1) | BIT(0); /* its a page table */
