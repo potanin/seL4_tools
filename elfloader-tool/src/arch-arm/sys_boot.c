@@ -315,6 +315,8 @@ void continue_boot(int was_relocated)
 
 #endif
     } else {
+        /* If we are not in HYP mode, we enable the SV MMU and paging
+         * just in case the kernel does not support hyp mode. */
         init_boot_vspace(&kernel_info);
     }
 
@@ -323,6 +325,7 @@ void continue_boot(int was_relocated)
 #endif /* CONFIG_MAX_NUM_NODES */
 
     if (is_hyp_mode()) {
+        /* printf removed: caches/MMU are OFF here, UART MMIO is unmapped */
         arm_enable_hyp_mmu();
     } else {
         arm_enable_mmu();
