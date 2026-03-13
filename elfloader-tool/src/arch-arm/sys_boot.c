@@ -325,9 +325,11 @@ void continue_boot(int was_relocated)
 #endif /* CONFIG_MAX_NUM_NODES */
 
     if (is_hyp_mode()) {
-        /* printf removed: caches/MMU are OFF here, UART MMIO is unmapped */
+        // printf("Enabling hypervisor MMU and jumping to entry point...\n\n");
+        // ^ disabled: disable_caches_hyp() has torn down the MMU, UART MMIO is unmapped
         arm_enable_hyp_mmu();
     } else {
+        printf("Enabling MMU and jumping to entry point...\n\n");
         arm_enable_mmu();
     }
     /* Enter kernel. The UART is no longer accessible here. */
