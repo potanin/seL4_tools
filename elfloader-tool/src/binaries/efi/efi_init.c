@@ -14,10 +14,7 @@ extern void _start(void);
 
 /* Override the weak plat_console_putchar from the UART driver.
  * Before ExitBootServices, UEFI's page tables do not map the UART MMIO
- * region (0x0c280000). The default weak implementation calls
- * uart_8250_putchar() which faults on unmapped MMIO.
- * After ExitBootServices the elfloader sets up identity-mapped page tables
- * and the kernel initializes its own UART driver, so output resumes there. */
+ * region (0x0c280000) so the default uart_8250_putchar() faults. */
 int plat_console_putchar(unsigned int c);
 int plat_console_putchar(unsigned int c)
 {
