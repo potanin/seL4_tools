@@ -100,48 +100,6 @@ BEGIN_FUNC(arm_enable_hyp_mmu)
     dsb     nsh
     isb
 
-    /* T234: Mitigate stale firmware cache line RAS errors.
-     *
-     * Firmware (MB1/MB2/ATF/UEFI) leaves dirty cache lines at
-     * protected addresses (paddr 0x0, 0xda0, etc.). When cache
-     * pressure evicts them, writebacks trigger IOB RAS errors
-     * → SError → ATF unconditionally powers off the core.
-     *
-     * Countermeasures applied here:
-     *
-     * 1. CBB ERD (Error Response Disable): makes CBB return
-     *    0xdead2003 instead of SLV_ERR. Same as Linux tegra234-cbb.
-     *    Doesn't prevent IOB from generating its own RAS error.
-     *
-     * 2. dc isw: invalidate CPU caches (L1/L2/L3) by set/way.
-     *    Discards dirty lines without writeback (no bus transaction).
-     *    Doesn't reach SLC (L4).
-     *
-     * Cannot reach SLC dirty lines from NS-EL2:
-     * - dc civac/dc ivac: A78AE cleans dirty lines before
-     *   invalidating → writeback → IOB RAS → ATF kills core.
-     * - IOB/ACI ERRCTLR: Secure-only, writes silently ignored.
-     * - MCE ROC_FLUSH_CACHE SMC: not supported on T234.
-     * - SDEI handlers: ATF kills core after dispatch regardless.
-     *
-     * Remaining non-determinism depends on firmware cache state
-     * at boot. Fix requires custom ATF (don't kill core on RAS). */
-
-    /* CBB ERD: base 0x13a00000 + offset 0x3a004 */
-    movz    x8, #0xa004
-    movk    x8, #0x13a3, lsl #16
-    mov     w9, #1
-    str     w9, [x8]
-    dsb     sy
-
-    /* Invalidate CPU caches to discard stale firmware dirty lines.
-     * Our data was already flushed to DRAM by flush_to_poc(dc cvac).
-     * Caches are disabled and MMU is off, so no new dirty lines. */
-    bl      invalidate_dcache
-
-    /* SDEI handler registration is done later in the kernel
-     * (boot.c) where the handler virtual address is valid. */
-
     /*
      *   DEVICE_nGnRnE      000     00000000
      *   DEVICE_nGnRE       001     00000100
