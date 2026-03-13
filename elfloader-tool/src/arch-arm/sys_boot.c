@@ -55,66 +55,6 @@ static void flush_to_poc(void *start, size_t size)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
-#ifdef CONFIG_IMAGE_EFI
-/*
- * Send one BPMP IPC message and wait for response.
- * BPMP IPC shmem (0x40070000) is mapped in UEFI page tables.
- * Must be called before ExitBootServices.
- */
-static int bpmp_send_phys(uint32_t mrq, const uint32_t *payload, int nwords)
-{
-    volatile uint32_t *tx = (volatile uint32_t *)(uintptr_t)0x40070000;
-    volatile uint32_t *rx = (volatile uint32_t *)(uintptr_t)0x40071000;
-    volatile uint32_t *db = (volatile uint32_t *)(uintptr_t)0x3c90300;
-
-    uint32_t tc = tx[0];
-    uint32_t rx_exp = rx[0] + 1;
-
-    tx[32] = mrq;
-    tx[33] = 2;  /* flags = MSG_RING */
-    for (int i = 0; i < nwords; i++)
-        tx[34 + i] = payload[i];
-
-    __asm__ volatile("dsb sy" ::: "memory");
-    tx[0] = tc + 1;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *db = 1;
-    __asm__ volatile("dsb sy" ::: "memory");
-
-    int timeout = 2000000;
-    while (rx[0] != rx_exp && --timeout > 0);
-    if (timeout > 0) {
-        rx[16] = rx_exp;
-        __asm__ volatile("dsb sy" ::: "memory");
-    }
-    return timeout > 0;
-}
-
-/* Enable UARTC clock via BPMP: CLK_ENABLE + SET_RATE + RESET_DEASSERT */
-static void bpmp_enable_uartc(void)
-{
-    uint32_t p[4];
-
-    /* CLK_ENABLE: MRQ_CLK=22, CMD=7, clk=157 (UARTC) */
-    p[0] = (7 << 24) | 157;
-    p[1] = 0;
-    bpmp_send_phys(22, p, 2);
-
-    /* CLK_SET_RATE: 1843200 Hz = 115200 * 16 */
-    p[0] = (2 << 24) | 157;
-    p[1] = 0;
-    p[2] = 1843200;
-    p[3] = 0;
-    bpmp_send_phys(22, p, 4);
-
-    /* RESET_DEASSERT: MRQ_RESET=20, CMD=2, rst=102 (UARTC) */
-    p[0] = 2;
-    p[1] = 102;
-    bpmp_send_phys(20, p, 2);
-}
-
-#endif
-
 /*
  * Make sure the ELF loader is below the kernel's first virtual address
  * so that when we enable the MMU we can keep executing.
@@ -205,10 +145,6 @@ void main(UNUSED void *arg)
 #elif defined(CONFIG_IMAGE_EFI)
 
     bootloader_dtb = efi_get_fdt();
-
-    /* Enable UARTC clock via BPMP before ExitBootServices.
-     * BPMP IPC shmem (0x40070000) is mapped in UEFI page tables. */
-    bpmp_enable_uartc();
 
     if (efi_exit_boot_services() != EFI_SUCCESS) {
         printf("ERROR: Unable to exit UEFI boot services!\n");
