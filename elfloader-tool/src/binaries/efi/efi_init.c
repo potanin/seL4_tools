@@ -11,6 +11,23 @@ void *__application_handle = NULL;             // current efi application handle
 efi_system_table_t *__efi_system_table = NULL; // current efi system table
 
 extern void _start(void);
+
+/* Override the weak plat_console_putchar from the UART driver.
+ *
+ * main() in sys_boot.c calls printf() before ExitBootServices (e.g. the
+ * "ELF-loader started on" banner). The default weak implementation in
+ * drivers/uart/common.c calls uart_8250_putchar(), which writes to UART
+ * MMIO at 0x0c280000. UEFI's page tables do not map that address, so the
+ * write faults immediately (data abort at EL1). This no-op avoids the
+ * fault. Serial output resumes once the elfloader enables the MMU with
+ * identity-mapped page tables and the kernel initializes its UART driver. */
+int plat_console_putchar(unsigned int c);
+int plat_console_putchar(unsigned int c)
+{
+    (void)c;
+    return 0;
+}
+
 unsigned int efi_main(uintptr_t application_handle, uintptr_t efi_system_table)
 {
     clear_bss();

@@ -40,6 +40,7 @@ static int uart_8250_init(struct elfloader_device *dev,
 
 static const struct dtb_match_table uart_8250_matches[] = {
     { .compatible = "nvidia,tegra20-uart" },
+    { .compatible = "nvidia,tegra194-hsuart" },
     { .compatible = "ti,omap3-uart" },
     { .compatible = "snps,dw-apb-uart" },
     { .compatible = NULL /* sentinel */ },

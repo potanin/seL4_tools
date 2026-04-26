@@ -18,25 +18,23 @@
 static void init_downpages(void)
 {
     word_t i;
-    vaddr_t start_vaddr = (vaddr_t)_text & ~MASK(ARM_2MB_BLOCK_BITS);
-    vaddr_t end_vaddr = (vaddr_t)_end;
+    // vaddr_t start_vaddr = (vaddr_t)_text & ~MASK(ARM_2MB_BLOCK_BITS);
+    // vaddr_t end_vaddr = (vaddr_t)_end;
 
     _boot_pgd_down[0] = ((uintptr_t)_boot_pud_down) | BIT(1) | BIT(0); /* its a page table */
 
-    /* We only map in 1 GiB, so check that the loader doesn't cross 1GiB boundary. */
-    if (GET_PUD_INDEX(start_vaddr) != GET_PUD_INDEX(end_vaddr)) {
-        printf("We only map 1GiB, but elfloader paddr range covers multiple GiB.\n");
-        abort();
-    }
-
-    _boot_pud_down[GET_PUD_INDEX(start_vaddr)] = ((uintptr_t)_boot_pmd_down) | BIT(1) | BIT(0);
-
-    for (i = GET_PMD_INDEX(start_vaddr); i <= GET_PMD_INDEX(end_vaddr); i++) {
-        _boot_pmd_down[i] = (uintptr_t) start_vaddr
-                            | BIT(10)  /* access flag */
+    /* Upstream (ee7435b) maps only the elfloader's 2 MiB PMD blocks via
+     * _boot_pmd_down. We map the full 4 GiB PA range as 1 GiB PUD block
+     * entries instead. On T234 the Cortex-A78AE speculatively reads from
+     * Normal-mapped addresses; unmapped regions cause translation faults
+     * at EL2. Mapping everything avoids this. The kernel's SDRAM-only
+     * physical window and 2 MiB low-address reservation (boot.c) prevent
+     * RAS errors from firmware-protected carve-outs once the kernel takes over. */
+    for (i = 0; i < BIT(PUD_BITS); i++) {
+        _boot_pud_down[i] = (i << ARM_1GB_BLOCK_BITS)
+                            | BIT(10) /* access flag */
                             | (4 << 2) /* MT_NORMAL memory */
-                            | BIT(0);  /* 2M block */
-        start_vaddr += BIT(ARM_2MB_BLOCK_BITS);
+                            | BIT(0); /* 1G block */
     }
 }
 

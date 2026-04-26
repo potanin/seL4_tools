@@ -22,11 +22,16 @@
 .extern _boot_pgd_down
 
 BEGIN_FUNC(disable_caches_hyp)
-    stp     x29, x30, [sp, #-16]!
-    mov     x29, sp
-    bl      flush_dcache
+    /* T234 (Orin): DO NOT use flush_dcache (dc cisw) here.
+     * dc cisw only reaches CPU caches, not the T234 system-level cache (SLC).
+     * It causes data to get stuck in the SLC, making subsequent DRAM reads
+     * return stale data after caches are disabled.
+     *
+     * The caller has already flushed all critical data to PoC (DRAM) using
+     * dc cvac via flush_to_poc(). We just need dsb to ensure ordering,
+     * then disable caches. No stack access after disable. */
+    dsb     sy
     disable_id_cache sctlr_el2, x9
-    ldp     x29, x30, [sp], #16
     ret
 END_FUNC(disable_caches_hyp)
 
@@ -71,14 +76,29 @@ BEGIN_FUNC(leave_hyp)
 END_FUNC(leave_hyp)
 
 BEGIN_FUNC(arm_enable_hyp_mmu)
-    stp     x29, x30, [sp, #-16]!
-    mov     x29, sp
+    /* T234 (Orin): caches are already disabled by disable_caches_hyp() before
+     * this function is called. Page tables have been flushed to PoC (DRAM)
+     * by the caller using dc cvac. We only need dsb to ensure all prior
+     * stores are ordered, then disable MMU and switch page tables.
+     *
+     * DO NOT call flush_dcache here — dc cisw on T234 interacts badly with
+     * the system-level cache (SLC) and causes intermittent hangs (~70%).
+     *
+     * Save LR/FP in callee-saved x19/x20, and caller's x19/x20 in x21/x22.
+     * No stack access — all state in registers through the MMU transition. */
+    mov     x21, x19            /* save caller's x19 */
+    mov     x22, x20            /* save caller's x20 */
+    mov     x19, x30            /* stash return address */
+    mov     x20, x29            /* stash frame pointer */
 
-    bl      flush_dcache
+    dsb     sy                  /* ensure all prior stores are visible */
 
     disable_mmu sctlr_el2, x8
 
-    bl      invalidate_icache
+    /* Inline invalidate_icache to avoid bl clobbering x30 */
+    ic      iallu
+    dsb     nsh
+    isb
 
     /*
      *   DEVICE_nGnRnE      000     00000000
@@ -108,12 +128,18 @@ BEGIN_FUNC(arm_enable_hyp_mmu)
     isb
 
     enable_mmu  sctlr_el2, x8
-    ic  ialluis
-    dsb ish
+    ic      ialluis
+    dsb     ish
     isb
     tlbi    alle2is
     dsb     ish
     isb
-    ldp     x29, x30, [sp], #16
+
+    /* MMU+caches back ON with seL4 page tables.
+     * Restore all callee-saved regs from registers (no stack needed). */
+    mov     x30, x19
+    mov     x29, x20
+    mov     x19, x21            /* restore caller's x19 */
+    mov     x20, x22            /* restore caller's x20 */
     ret
 END_FUNC(arm_enable_hyp_mmu)

@@ -39,6 +39,23 @@ extern void finish_relocation(int offset, void *_dynamic, unsigned int total_off
 void continue_boot(int was_relocated);
 
 /*
+ * Flush a range of memory from all cache levels to Point of Coherence.
+ * On T234, dc cisw (clean by set/way) only reaches the CPU caches,
+ * not the system-level cache (SLC). dc cvac goes all the way to PoC,
+ * ensuring data reaches DRAM.
+ */
+static void flush_to_poc(void *start, size_t size)
+{
+    uintptr_t addr = (uintptr_t)start & ~63UL;  /* align to cache line */
+    uintptr_t end = (uintptr_t)start + size;
+    while (addr < end) {
+        __asm__ volatile("dc cvac, %0" :: "r"(addr) : "memory");
+        addr += 64;
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
+/*
  * Make sure the ELF loader is below the kernel's first virtual address
  * so that when we enable the MMU we can keep executing.
  */
@@ -127,12 +144,12 @@ void main(UNUSED void *arg)
 
 #elif defined(CONFIG_IMAGE_EFI)
 
+    bootloader_dtb = efi_get_fdt();
+
     if (efi_exit_boot_services() != EFI_SUCCESS) {
         printf("ERROR: Unable to exit UEFI boot services!\n");
         abort();
     }
-
-    bootloader_dtb = efi_get_fdt();
 
 #endif
 
@@ -156,6 +173,7 @@ void main(UNUSED void *arg)
                num_apps);
         abort();
     }
+
     /*
      * We don't really know where we've been loaded.
      * It's possible that EFI loaded us in a place
@@ -195,9 +213,43 @@ void continue_boot(int was_relocated)
     if (is_hyp_mode()) {
 #ifdef CONFIG_ARCH_AARCH64
         extern void disable_caches_hyp();
-        disable_caches_hyp();
-#endif
+
+        /* Build boot page tables BEFORE disabling caches so we can
+         * flush them to PoC (DRAM) with dc cvac while caches are ON.
+         * On T234, dc cisw only reaches CPU caches, not the system-level
+         * cache (SLC). dc cvac reaches PoC past the SLC. */
         init_hyp_boot_vspace(&kernel_info);
+
+        /* Flush everything to PoC (DRAM) using dc cvac (caches ON).
+         * This ensures data passes through all caches including T234's SLC
+         * and reaches DRAM before we disable caches.
+         * Must flush: boot page tables, kernel image, user image, DTB,
+         * and elfloader text/data/BSS (includes stack). */
+        {
+            extern uint64_t _boot_pgd_down[];
+            extern uint64_t _boot_pud_down[];
+            extern uint64_t _boot_pud_up[];
+            extern uint64_t _boot_pmd_up[];
+            flush_to_poc(_boot_pgd_down, 4096);
+            flush_to_poc(_boot_pud_down, 4096);
+            flush_to_poc(_boot_pud_up, 4096);
+            flush_to_poc(_boot_pmd_up, 4096);
+        }
+        flush_to_poc((void *)(uintptr_t)kernel_info.phys_region_start,
+                     kernel_info.phys_region_end - kernel_info.phys_region_start);
+        flush_to_poc((void *)(uintptr_t)user_info.phys_region_start,
+                     user_info.phys_region_end - user_info.phys_region_start);
+        if (dtb) {
+            flush_to_poc((void *)dtb, dtb_size);
+        }
+        /* Flush elfloader itself last (includes stack, globals, BSS).
+         * The flush_to_poc calls above dirtied stack frames — this final
+         * flush cleans them all to DRAM. */
+        flush_to_poc(_text, (uintptr_t)_end - (uintptr_t)_text);
+
+        disable_caches_hyp();
+
+#endif
     } else {
         /* If we are not in HYP mode, we enable the SV MMU and paging
          * just in case the kernel does not support hyp mode. */
@@ -209,7 +261,8 @@ void continue_boot(int was_relocated)
 #endif /* CONFIG_MAX_NUM_NODES */
 
     if (is_hyp_mode()) {
-        printf("Enabling hypervisor MMU and jumping to entry point...\n\n");
+        // printf("Enabling hypervisor MMU and jumping to entry point...\n\n");
+        // ^ disabled: disable_caches_hyp() has torn down the MMU, UART MMIO is unmapped
         arm_enable_hyp_mmu();
     } else {
         printf("Enabling MMU and jumping to entry point...\n\n");

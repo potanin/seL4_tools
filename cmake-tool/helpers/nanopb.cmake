@@ -31,9 +31,16 @@ find_package(Nanopb REQUIRED)
 # generate nanopb runtime library
 file(GLOB nanopb_src ${NANOPB_SRC_ROOT_FOLDER}/*.h ${NANOPB_SRC_ROOT_FOLDER}/*.c)
 
-add_library(nanopb STATIC EXCLUDE_FROM_ALL ${nanopb_src})
-target_include_directories(nanopb PUBLIC ${NANOPB_SRC_ROOT_FOLDER})
-target_link_libraries(nanopb muslc)
+# FindNanopb.cmake (invoked above via find_package) already creates a nanopb
+# STATIC target but does not link it against muslc. In a seL4 build everything
+# compiles with -nostdinc, so without muslc's headers nanopb can't find stdint.h.
+# Augment the existing target instead of re-creating it.
+if(NOT TARGET nanopb)
+    add_library(nanopb STATIC EXCLUDE_FROM_ALL ${nanopb_src})
+    target_include_directories(nanopb PUBLIC ${NANOPB_SRC_ROOT_FOLDER})
+endif()
+target_link_libraries(nanopb PRIVATE muslc)
+add_dependencies(nanopb muslc_gen)
 
 # Treat the source diretory as immutable.
 #
